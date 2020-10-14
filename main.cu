@@ -4,6 +4,14 @@
 #include <limits.h>
 #include "repeat.h"
 
+#define CUDA_CALL(x) do {if((x)!=cudaSuccess) {                         \
+            printf("Error at %s:%d ==> %s\n",__FILE__,__LINE__, cudaGetErrorString(x)); \
+            return EXIT_FAILURE;}} while(0)                             \
+
+#define CHECK_PTR(x) do { if(x == NULL){                                \
+            printf("Error at %s:%d ===> %s is NULL\n", __FILE__,__LINE__, #x); \
+            exit(EXIT_FAILURE);}} while (0)                             \
+
 
 /*
  * alpha=0, used to determine #iterations
@@ -72,6 +80,86 @@ int get_shared_mem()
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
     return (int)prop.sharedMemPerBlock;
+}
+
+void occMonitor(clock_t *tStart, clock_t *tEnd, int *sm_id, int blocks, int threads,
+                int *maxOcc, int *wave, long int* maxLat)
+{
+    int numSM = mpc();
+    int warps = max(1, blocks*threads/32);
+    int wpb = max(1, BS/32);
+    long int *minCycle, *maxCycle;
+    minCycle=(long int*)malloc(sizeof(long int)*numSM);
+    maxCycle=(long int*)malloc(sizeof(long int)*numSM);
+    int *asgW = (int*)malloc(sizeof(int)*numSM);
+    for (int sm = 0; sm < numSM; sm++){
+        minCycle[sm] = LONG_MAX; // max of long int
+        maxCycle[sm] = LONG_MIN; // min of long int
+        asgW[sm] = 0;
+    }
+    //printf("Station 1, warps: %d\n", warps); fflush(stdout);
+    for (int w = 0; w < warps; w ++){
+        int sm = sm_id[w/wpb];
+        //printf("w=%d, sm=%d\n", w, sm);
+        asgW[sm]++;
+        if (tStart[w] < minCycle[sm])
+            minCycle[sm] = tStart[w];
+        if (tEnd[w] > maxCycle[sm])
+            maxCycle[sm] = tEnd[w];
+    }
+
+
+    int **occ = (int**)malloc(sizeof(int*)*numSM);
+    for (int sm = 0; sm < numSM; sm ++){
+        size_t occSize = sizeof(int)*(maxCycle[sm]-minCycle[sm]+1);
+        occ[sm] = (int*)malloc(occSize);
+        for (int i = 0; i < maxCycle[sm]-minCycle[sm]+1; i ++)
+            occ[sm][i] = 0;
+    }
+    for (int w = 0; w < warps; w ++){
+        int sm = sm_id[w/wpb];
+        occ[sm][tStart[w]-minCycle[sm]] ++;
+        occ[sm][tEnd[w]-minCycle[sm]] --;
+    }
+
+    printf("Occupancy Summary:\n");
+    printf("smid  max\tave      \tlatency \ttotal\n");
+    float sumOverAllSM = 0.0f;
+    *maxLat=0;
+    float sumWave = 0.0f;
+    float sumThr = 0.0f;
+    for (int sm = 0; sm < numSM; sm ++){
+        int state = 0;
+        int max = 0;
+        long long int sum = 0;
+
+        long int len = maxCycle[sm]-minCycle[sm]+1;
+        for (int i = 0; i < len; i ++){
+            state += occ[sm][i];
+            occ[sm][i] = state;
+            if (state > max) max = state;
+            sum += state;
+        }
+        printf("%2d    %2d\t%f\t%ld \t%d\n", sm, max, (float)sum/(float)len, len-1, asgW[sm]);
+        sumOverAllSM += (float)sum/(float)len;
+        if ( (len-1) > *maxLat) *maxLat = len-1;
+        sumWave += (float)asgW[sm] / (float)max;
+        *maxOcc=max;
+        sumThr += (float)ITER * asgW[sm] * ALPHA / (float)(len-1);
+    }
+    *wave = (int) (sumWave/numSM);
+    printf("Ave Occupancy: %f\n",sumOverAllSM/numSM);
+    printf("Max Occupancy: %d\n", *maxOcc);
+    printf("Max Latency: %ld\n", *maxLat);
+    printf("Ave Waves: %d\n", *wave);
+    printf("Ave throughput: %f\n", sumThr/numSM);
+
+    free (minCycle);
+    free (maxCycle);
+    free (asgW);
+    for (int sm = 0; sm < numSM; sm ++)
+        free (occ[sm]);
+    free (occ);
 }
 
 /* E.D. Riedijk */
@@ -194,7 +282,7 @@ __global__ void chase_pointers (
             sm_id[blockIdx.x] = get_smid();
         }
     }
-    svalue[blockIdx.x] = laneid;
+    svalue[threadIdx.x] = laneid;
 }
 #endif
 
@@ -202,16 +290,16 @@ __global__ void chase_pointers (
 
 int main (int argc, char *argv[])
 {
-    cudaError_t error_id;
     /*
      * Array size = 512 MB = 64 M elements of 8-byte uintptr_t
      * The extra BS*8 byte is made for the last block's last iteration
      */
-    size_t arraySize = 512*1024*1024 + BS*8;
-    int arrayLen = 64*1024*1024;
+    int arrayLen = 210*1024*1024;
+    size_t arraySize = arrayLen*8 + BS*8;
     uintptr_t *ptr_array = (uintptr_t*)malloc(arraySize);
+    CHECK_PTR(ptr_array);
     uintptr_t *ptr_array_d = 0;
-    cudaMalloc ((void **)&ptr_array_d, arraySize);
+    CUDA_CALL(cudaMalloc ((void **)&ptr_array_d, arraySize));
     /*
      * The array is initialized so that
      * array[i] = &array[i+N], where N is blocksize (BS)
@@ -234,7 +322,7 @@ int main (int argc, char *argv[])
     // } while (state != 1);
     // ptr_array[0] = (uintptr_t)&ptr_array_d[1];
 
-    cudaMemcpy (ptr_array_d, ptr_array, arraySize, cudaMemcpyHostToDevice);
+    CUDA_CALL(cudaMemcpy (ptr_array_d, ptr_array, arraySize, cudaMemcpyHostToDevice));
 
 #ifdef EXPERIMENT
     /*
@@ -255,34 +343,35 @@ int main (int argc, char *argv[])
     int warps = max(1, blocks*threads/32);
     int warpsPerBlock = max(1, threads/32);
 
-    printf("blocks: %d, threads: %d, warps: %d, warpsPerBlock: %d\n",
-           blocks, threads, warps, warpsPerBlock);
-    printf("sharedMemPerBlock: %d bytes\n", get_shared_mem());
-    printf("#blocks limited by smem: %d\n", get_shared_mem()/(SMEM*4));
-    printf("Occupancy limited by smem: %d warps\n",BS/32 * get_shared_mem()/(SMEM*4));
+    printf("blocks: %d, threads: %d, warps: %d, ", blocks, threads, warps);
+    printf("#blocks/SM limited by smem: %d\n", get_shared_mem()/(SMEM*4));
 
     /*
      * Initialize output array, one element for each warp
      */
     int *output = (int*)malloc(sizeof(int)*warps);
+    CHECK_PTR(output);
     int *output_d;
-    cudaMalloc((void**)&output_d, sizeof(int)*warps);
+    CUDA_CALL(cudaMalloc((void**)&output_d, sizeof(int)*warps));
     /*
      * Initialize array to record timestamps
      * One warp has one start and one end timestamps
      */
     clock_t *tStart = (clock_t*)malloc(sizeof(clock_t)*warps);
+    CHECK_PTR(tStart);
     clock_t *tEnd = (clock_t*)malloc(sizeof(clock_t)*warps);
+    CHECK_PTR(tEnd);
     clock_t *tStart_d, *tEnd_d;
-    cudaMalloc((void**)&tStart_d, sizeof(clock_t)*warps);
-    cudaMalloc((void**)&tEnd_d, sizeof(clock_t)*warps);
+    CUDA_CALL(cudaMalloc((void**)&tStart_d, sizeof(clock_t)*warps));
+    CUDA_CALL(cudaMalloc((void**)&tEnd_d, sizeof(clock_t)*warps));
     /*
      * Initialize array to record sm_id for each warp
      * Note that warps from the same block share the same sm_id
      */
     int * sm_id = (int*)malloc(sizeof(int)*blocks);
+    CHECK_PTR(sm_id);
     int * sm_id_d;
-    cudaMalloc((void**)&sm_id_d, sizeof(int)*blocks);
+    CUDA_CALL(cudaMalloc((void**)&sm_id_d, sizeof(int)*blocks));
 
 
 #ifdef EXPERIMENT
@@ -300,18 +389,28 @@ int main (int argc, char *argv[])
     pure_arith <<<blocks, threads>>> (output_d, tStart_d, tEnd_d, sm_id_d, 1.0, 1.0);
 #endif
 
-    error_id = cudaGetLastError();
-    if (error_id != cudaSuccess) {
-        printf("Kernel launch error:  %s\n", cudaGetErrorString(error_id));
-    }
+    CUDA_CALL(cudaGetLastError());
 
-    cudaMemcpy(output, output_d, sizeof(int)*warps, cudaMemcpyDeviceToHost);
-    cudaMemcpy(sm_id, sm_id_d, sizeof(int)*blocks, cudaMemcpyDeviceToHost);
-    cudaMemcpy(tStart, tStart_d, sizeof(clock_t)*warps, cudaMemcpyDeviceToHost);
-    cudaMemcpy(tEnd, tEnd_d, sizeof(clock_t)*warps, cudaMemcpyDeviceToHost);
+    CUDA_CALL(cudaMemcpy(output, output_d, sizeof(int)*warps, cudaMemcpyDeviceToHost));
+    CUDA_CALL(cudaMemcpy(sm_id, sm_id_d, sizeof(int)*blocks, cudaMemcpyDeviceToHost));
+    CUDA_CALL(cudaMemcpy(tStart, tStart_d, sizeof(clock_t)*warps, cudaMemcpyDeviceToHost));
+    CUDA_CALL(cudaMemcpy(tEnd, tEnd_d, sizeof(clock_t)*warps, cudaMemcpyDeviceToHost));
     /*
      * clock_t is long int, which is signed 8-byte data type
      */
+    if (tStart[0] == 0){
+        printf(">>>>> Ugly cycle numbers: tStart[0] = %ld \n", tStart[0]);
+        exit(EXIT_FAILURE);
+    }
+
+    /*
+     * Simple occupancy summary
+     */
+    int maxOcc, wave;
+    long int maxLat;
+    occMonitor(tStart, tEnd, sm_id, blocks, BS, &maxOcc, &wave, &maxLat);
+
+
     int writeToFile = 0;
     if (argc == 2){
         writeToFile = atoi(argv[1]);
@@ -322,8 +421,9 @@ int main (int argc, char *argv[])
      */
     if (writeToFile){
         char filename[32];
-        sprintf(filename, "result_%d_%d_%d.txt", ITER, ALPHA, BS);
+        sprintf(filename, "result_%d_%d_%d_%ld_%d.txt", ALPHA, maxOcc, wave, maxLat, warps);
         FILE *fptr = fopen(filename, "w");
+        CHECK_PTR(fptr);
         fprintf(fptr, "warpid\tsmid\tstart\t\tend\n");
         for (int w = 0; w < warps; w++){
             fprintf(fptr, "%5d\t%2d\t%ld\t%ld\n",
