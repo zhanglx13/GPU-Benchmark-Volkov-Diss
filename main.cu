@@ -294,12 +294,39 @@ int main (int argc, char *argv[])
      * Array size = 512 MB = 64 M elements of 8-byte uintptr_t
      * The extra BS*8 byte is made for the last block's last iteration
      */
-    int arrayLen = 210*1024*1024;
+    int arrayLen = 64*1024*1024;
     size_t arraySize = arrayLen*8 + BS*8;
     uintptr_t *ptr_array = (uintptr_t*)malloc(arraySize);
     CHECK_PTR(ptr_array);
     uintptr_t *ptr_array_d = 0;
-    CUDA_CALL(cudaMalloc ((void **)&ptr_array_d, arraySize));
+    /*
+     * A global memory chunk of (4 GB +arraySize) bytes is allocated so that
+     * there is always a chunk of memory inside the allocated chunk, whose
+     * starting address has the form: 0xxxxxxxxx00000000, i.e. the lower 32
+     * bits of the address is 0.
+     *
+     * - Why need to do that?
+     *   The returned address from cudaMalloc is changing on eldar-11 (It could
+     *   be the case that the GPU is shared by other processes on the server so
+     *   that every time the OS allocates memory on different part of the device
+     *   memory). The intention is make sure that the lower 32 bits of ptr_array_d's
+     *   starting address is always 0.
+     * - How to get the address for ptr_array_d?
+     *   This is done by computing the offset between working_ptr.low32 and 0. Then
+     *   ptr_array_d should be working_ptr + offset.
+     */
+    uint64_t workingSize = (uint64_t)4*1024*1024*1024 + arraySize; // 4 GB + arraySize
+    void *working_ptr;
+    cudaMalloc((void**)&working_ptr, workingSize);
+    uint32_t low32_start = (uint32_t)(uint64_t)working_ptr;
+    uint64_t offset;
+    if (low32_start == 0){
+        offset = 0;
+    }
+    else{
+        offset = (uint64_t)(0xffffffff - low32_start + 1);
+    }
+    ptr_array_d = (uintptr_t*) ((uint64_t)working_ptr+offset);
     /*
      * The array is initialized so that
      * array[i] = &array[i+N], where N is blocksize (BS)
@@ -343,8 +370,15 @@ int main (int argc, char *argv[])
     int warps = max(1, blocks*threads/32);
     int warpsPerBlock = max(1, threads/32);
 
+    /*
+     * On GTX 1080, get_shared_mem() returns the max shared memory per block (48 KB).
+     * Since the total size of shared memory per SM is 96 KB, there are at least
+     * 2 blocks per SM.
+     */
+    int activeBlocks = 96*1024/(SMEM*4);
     printf("blocks: %d, threads: %d, warps: %d, ", blocks, threads, warps);
-    printf("#blocks/SM limited by smem: %d\n", get_shared_mem()/(SMEM*4));
+    printf("#blocks/SM limited by smem: %d, ", activeBlocks);
+    printf("Expected maxOcc: %d\n", activeBlocks*warpsPerBlock);
 
     /*
      * Initialize output array, one element for each warp
@@ -420,8 +454,8 @@ int main (int argc, char *argv[])
      * Only write the tStart, tEnd and sm_id of each warp
      */
     if (writeToFile){
-        char filename[32];
-        sprintf(filename, "result_%d_%d_%d_%ld_%d.txt", ALPHA, maxOcc, wave, maxLat, warps);
+        char filename[64];
+        sprintf(filename, "Pascal_CC61_result_%d_%d_%d_%ld_%d.txt", ALPHA, maxOcc, wave, maxLat, warps);
         FILE *fptr = fopen(filename, "w");
         CHECK_PTR(fptr);
         fprintf(fptr, "warpid\tsmid\tstart\t\tend\n");
@@ -433,7 +467,7 @@ int main (int argc, char *argv[])
     }
 
     /* clean up */
-    cudaFree (ptr_array_d);
+    cudaFree (working_ptr);
     cudaFree (output_d);
     cudaFree (tStart_d);
     cudaFree (tEnd_d);
