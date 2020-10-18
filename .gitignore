@@ -3,3 +3,10 @@ run.sh
 quick.sh
 result_*.txt
 occ_sm*.pdf
+occ_sm*.txt
+occSum.txt
+a.out
+draw.gp
+main
+run_log
+compile_dump
