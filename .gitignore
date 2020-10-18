@@ -3,3 +3,17 @@ run.sh
 quick.sh
 result_*.txt
 occ_sm*.pdf
+tmp_err
+compile_dump
+a.out
+main
+occSum.txt
+view.sh
+draw.gp
+toServer.sh
+run_*.log
+figure.pdf
+show.pdf
+run_log
+*_all_alpha.pdf
+*_aveArithThr_*.txt
