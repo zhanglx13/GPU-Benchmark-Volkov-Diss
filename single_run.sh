@@ -5,10 +5,7 @@
 ## $3: BS
 ## $4: SMEM
 ##
-## The above 4 args are used to compile main.cu. The following arg is used to
-## print the maxOcc info. 
-## 
-## $5: maxOcc
+## The above 4 args are used to compile main.cu.
 
 
 if [[ $# -lt 4 ]];then
@@ -17,7 +14,7 @@ if [[ $# -lt 4 ]];then
 fi
 #echo ">>>>>>>>>> ALPHA=$2 maxOcc=$5 ITER=$1 <<<<<<<<<<"
 ## Compile
-nvcc -arch=sm_35 -DITER=$1 -DALPHA=$2 -DBS=$3 -DSMEM=$4 -DEXPERIMENT main.cu -o main -Xptxas -v &> compile_dump
+nvcc -arch=sm_61 -DITER=$1 -DALPHA=$2 -DBS=$3 -DSMEM=$4 -DEXPERIMENT main.cu -o main -Xptxas -v &> compile_dump
 #tail -n 1 compile_dump
 
 limit=10
@@ -57,12 +54,11 @@ while [[ "$flag" -eq "1" ]]; do
         wave=$(grep "Ave Waves:" occSum.txt | awk '{print $3}')
         maxLat=$(grep "Max Latency:" occSum.txt | awk '{print $3}')
         arithThr=$(grep "Ave throughput:" occSum.txt | awk '{print $3}')
-        echo "$2   $maxOcc   $arithThr   $1   $3   $4   $maxLat   $warps" >>  arithThr_$2.txt
-        fileToCopy=result_$2_${maxOcc}_${wave}_${maxLat}_*.txt
-        echo "Copying $fileToCopy to server ..."
-        ./toServer.sh $fileToCopy
-        ## Remove the files in case dropbox space explodes
-        rm result_$2_${maxOcc}_*.txt
+        echo "$2   $maxOcc   $arithThr   $1   $3   $4   $maxLat   $warps" >>  Pascal_CC61_arithThr_$2.txt
+        fileToCopy=Pascal_CC61_result_$2_${maxOcc}_${wave}_${maxLat}_*.txt
+        echo "Copying $fileToCopy to ~/localwd/..."
+        cp $fileToCopy ../../localwd/
+        rm Pascal_CC61_result_$2_${maxOcc}_*.txt
         flag=0
     else
         echo "Decrease threshold and try again"
