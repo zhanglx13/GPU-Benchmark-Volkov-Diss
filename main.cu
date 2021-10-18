@@ -45,8 +45,7 @@
 #endif
 
 /*
- * Shared memory (#integers) per block, which is used to control
- * the occupancy.
+ * Shared memory (#integers) per block, which is used to control the occupancy.
  * The #blocks limited by shared memory is computed as
  *   sharedMemPerBlock / (SMEM*4)
  * The default SMEM is set to 2048. On TITAN, the default max #blocks
@@ -58,9 +57,10 @@
 
 /*
  * Here we make alpha a compile-time parameter
- * Check the following post to see why a second level of indirection
- * is required:
+ * Check the following post to see why a second level of indirection is required:
  * https://wiki.sei.cmu.edu/confluence/display/c/PRE05-C.+Understand+macro+replacement+when+concatenating+tokens+or+performing+stringification
+ * The key point is that we want a or b (if any of them is a macro) to be expanded
+ * before ## concatinates them together.
  */
 #define conc(a,b) conc_again(a,b)
 #define conc_again(a,b) a##b

@@ -6,8 +6,8 @@
 ## $4: SMEM
 ##
 ## The above 4 args are used to compile main.cu. The following arg is used to
-## print the maxOcc info. 
-## 
+## print the maxOcc info.
+##
 ## $5: maxOcc
 
 
@@ -49,7 +49,7 @@ while [[ "$flag" -eq "1" ]]; do
             aveOcc=$(grep "Ave Occupancy:" occSum.txt | awk '{print $3}')
             echo "$cnt: aveOcc = $aveOcc"
             cnt=$((cnt + 1))
-        fi 
+        fi
     done
 
     if [[ $(echo "$aveOcc > $occThr" | bc) -eq 1 ]]; then

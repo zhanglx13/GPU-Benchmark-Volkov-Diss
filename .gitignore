@@ -8,7 +8,6 @@ compile_dump
 a.out
 main
 occSum.txt
-view.sh
 draw.gp
 toServer.sh
 run_*.log
@@ -17,3 +16,8 @@ show.pdf
 run_log
 *_all_alpha.pdf
 *_aveArithThr_*.txt
+main_[0-9]*_[0-9]*_[0-9]*
+temp*
+test*
+figures/
+*.log

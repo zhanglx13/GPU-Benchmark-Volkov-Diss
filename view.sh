@@ -36,6 +36,12 @@ set -e
 ## $3: anything. This arg is used as a placeholder to enter the remote mode
 ################################################################################
 ARCH=Kepler
+
+if [[ $# -lt 2 ]];then
+    echo "Usage: ./view.sh <alpha> <occ> [optional arg]"
+    exit 0
+fi
+
 ofilename="${ARCH}_alpha=$1_occ=$2.pdf"
 
 if [[ $# -eq 3 ]]; then
@@ -73,9 +79,13 @@ if [[ $# -eq 3 ]]; then
     scp lxzhang@aida.cs.utexas.edu:/u/lxzhang/localwd/figures/$ofilename ./figures/$ofilename
 fi
 
-## Visualize the figure
-if [[ "$OSTYPE" == "darwin"* ]]; then
-	open ./figures/$ofilename
+if [[ -f ./figures/$ofilename ]]; then
+    ## Visualize the figure
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+	    open ./figures/$ofilename
+    else
+	    okular ./figures/$ofilename
+    fi
 else
-	okular ./figures/$ofilename
+    echo "$ofilename does not exist!"
 fi
